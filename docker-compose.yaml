@@ -1,0 +1,8 @@
+version: v3
+services:
+  web:
+    container_name: web_app
+    build: ./app
+    ports:
+      - 8080:80
+    restart: always
