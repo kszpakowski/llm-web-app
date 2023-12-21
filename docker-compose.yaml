@@ -2,7 +2,8 @@ version: v3
 services:
   web:
     container_name: web_app
-    build: ./app
+    # build: ./app
+    image: ghcr.io/kszpakowski/llm-web-app:main
     ports:
       - 80:80
     restart: always
