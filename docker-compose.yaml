@@ -2,8 +2,14 @@ version: v3
 services:
   web:
     container_name: web_app
-    # build: ./app
-    image: ghcr.io/kszpakowski/llm-web-app:main
+    build: .
+    # image: ghcr.io/kszpakowski/llm-web-app:main
     ports:
       - 80:80
     restart: always
+    volumes:
+      - ./documents:/documents
+      - ./db:/db
+    environment:
+        - API_KEY=${API_KEY}
+        - OPENAI_API_KEY=${OPENAI_API_KEY}

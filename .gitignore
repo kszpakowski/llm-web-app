@@ -1,2 +1,4 @@
-app/.venv
+.venv
 .env
+documents
+db
