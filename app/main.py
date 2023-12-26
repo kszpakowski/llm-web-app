@@ -1,10 +1,10 @@
-# from pathlib import Path
-# from llama_index.readers.file.docs_reader import PDFReader
-# from llama_index import VectorStoreIndex, StorageContext, load_index_from_storage
-
+from llama_index.readers.file.docs_reader import PDFReader
 
 import os
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from pathlib import Path
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from llama_index import StorageContext, VectorStoreIndex, load_index_from_storage
+
 from sqlalchemy.orm import Session
 
 from app.gtc_client import GtcClient
@@ -43,6 +43,12 @@ def read_documents(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     return crud.get_documents(db, skip=skip, limit=limit)
 
 
+@timed
+@app.get("/documents/{id}", response_model=schemas.Document)
+def read_documents(id: int, db: Session = Depends(get_db)):
+    return crud.get_document(db, document_id=id)
+
+
 # https://fastapi.tiangolo.com/tutorial/background-tasks/
 @timed
 @app.post("/documents/refresh")
@@ -70,55 +76,72 @@ def load_docs(db: Session = Depends(get_db)):
             crud.create_document(db, doc_create)
 
 
-# @timed
-# @api.get("/ask")
-# def ask(doc_id, prompt):
-#     # doc = GtcDocument(doc_id)
-#     return ask_doc(doc_id, prompt)
+@timed
+@app.post("/documents/{id}/ask")
+def ask(
+    id: int, prompt, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
+    background_tasks.add_task(handle_question, db, id, prompt)
+    return Response(status_code=202)
 
 
-# @timed
-# def download_doc(doc_id):
-#     db = Database()
-#     doc = db.get_doc(doc_id)
+def handle_question(db, doc_id, prompt):
+    print(f'generating answer for {doc_id}, question "{prompt}"')
+    doc = crud.get_document_by_body_id(db, doc_id)
+    if doc.status == "Initial":
+        crud.update_document(
+            db, schemas.DocumentUpdate(id=doc.id, status="Downloading")
+        )
+        (_, file_path) = download_doc(doc.body_id)
+        crud.update_document(
+            db, schemas.DocumentUpdate(id=doc.id, status="Downloaded", path=file_path)
+        )
 
-#     if not doc["path"]:
-#         print(f'Document content not present, downloading {doc["title"]}')
-#         body_id = doc["id"]
-#         path = Path(f"/documents/{body_id}")
-#         path.mkdir(parents=True, exist_ok=True)
+    if not doc.status == "Indexed":
+        crud.update_document(db, schemas.DocumentUpdate(id=doc.id, status="Indexing"))
+        index_document(doc.path)
+        crud.update_document(db, schemas.DocumentUpdate(id=doc.id, status="Indexed"))
 
-#         doc_body = gtc.get_doc_body(body_id)
-#         file_name = doc_body.fileName
-#         file_path = f"{path}/{file_name}"
-
-#         with open(file_path, "wb") as f:
-#             f.write(doc_body["document"])
-
-#         db.update_doc_path(body_id, file_path)
-#         print(f'Doc {doc["id"]} content downloaded')
-#         return db.get_doc(doc_id)
-#     else:
-#         print(f"Document {doc['id']} has been already downloaded")
-#         return doc
+    get_query_engine()
 
 
-# @timed
-# def get_query_engine(doc):
-#     vsp = Path(doc["path"]).parent / "vs"
-#     if vsp.exists():
-#         print("Using existing Vector store")
-#         # load the existing index
-#         storage_context = StorageContext.from_defaults(persist_dir=vsp)
-#         index = load_index_from_storage(storage_context)
-#     else:
-#         print("Creating and persisting vector store")
-#         reader = PDFReader()
-#         docs = reader.load_data(doc["path"], extra_info=doc)
-#         index = VectorStoreIndex.from_documents(docs)
-#         index.storage_context.persist(persist_dir=vsp)
+@timed
+def download_doc(doc_body_id):
+    print(f"Downloading {doc_body_id} document body")
+    path = Path(f"/documents/{doc_body_id}")
+    path.mkdir(parents=True, exist_ok=True)
 
-#     return index.as_query_engine()
+    doc_body = GtcClient().get_doc_body(doc_body_id)
+    file_name = doc_body.fileName
+    file_path = f"{path}/{file_name}"
+
+    with open(file_path, "wb") as f:
+        f.write(doc_body["document"])
+
+    return (file_name, file_path)
+
+
+@timed
+def index_document(path):
+    print(f"Indexing {path}")
+    vsp = Path(path).parent / "vs"
+    print(f"Creating and persisting vector store at {vsp}")
+    reader = PDFReader()
+    print("Created reader")
+    docs = reader.load_data(path, extra_info={})  # TODO add extra info
+    print("Loaded data")
+    index = VectorStoreIndex.from_documents(docs)
+    print("Created index")
+    index.storage_context.persist(persist_dir=vsp)
+    print("persisted index")
+
+
+@timed
+def get_query_engine(path):
+    print("Getting query engine")
+    vsp = Path(path).parent / "vs"
+    storage_context = StorageContext.from_defaults(persist_dir=vsp)
+    index = load_index_from_storage(storage_context)
 
 
 # @timed

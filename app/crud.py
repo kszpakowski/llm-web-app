@@ -32,6 +32,19 @@ def create_document(db: Session, document: schemas.DocumentCreate):
     db.refresh(db_document)
     return db_document
 
+def update_document(db: Session, document: schemas.DocumentUpdate):
+    doc = db.query(models.Document).filter(models.Document.id == document.id).first()
+    if document.path:
+        doc.path = document.path
+
+    if document.status:
+        doc.status = document.status
+    
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
 
 # def get_items(db: Session, skip: int = 0, limit: int = 100):
 #     return db.query(models.Item).offset(skip).limit(limit).all()
