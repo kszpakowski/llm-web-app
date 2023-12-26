@@ -43,23 +43,31 @@ def read_documents(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     return crud.get_documents(db, skip=skip, limit=limit)
 
 
+# https://fastapi.tiangolo.com/tutorial/background-tasks/
 @timed
 @app.post("/documents/refresh")
 def load_docs(db: Session = Depends(get_db)):
+    print("Getting gtc documents")
     gtc = GtcClient()
+    print("Getting gtc documents done")
     docs = gtc.get_all_documents_metadata()
     for doc in docs:
-        # db_user = crud.get_user_by_email(db, email=user.email)
-        # if db_user:
-        doc_create = schemas.DocumentCreate(
-            body_id=str(doc.idBodyDoc),
-            doc_name=doc.docName,
-            prod_code=doc.prodCode.strip(),
-            doc_title=doc.docTitle.strip(),
-            type_name=doc.typeName.strip(),
-            status="Initial",
-        )
-        crud.create_document(db, doc_create)
+        doc_body_id = str(doc.idBodyDoc)
+
+        db_doc = crud.get_document_by_body_id(db, document_body_id=doc_body_id)
+        if db_doc:
+            print(f"Document {doc_body_id} already present in db")
+        else:
+            print(f"Saving doc {doc_body_id}")
+            doc_create = schemas.DocumentCreate(
+                body_id=str(doc.idBodyDoc),
+                doc_name=doc.docName,
+                prod_code=doc.prodCode.strip(),
+                doc_title=doc.docTitle.strip(),
+                type_name=doc.typeName.strip(),
+                status="Initial",
+            )
+            crud.create_document(db, doc_create)
 
 
 # @timed

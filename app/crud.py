@@ -6,6 +6,9 @@ from . import models, schemas
 def get_document(db: Session, document_id: int):
     return db.query(models.Document).filter(models.Document.id == document_id).first()
 
+def get_document_by_body_id(db: Session, document_body_id: int):
+    return db.query(models.Document).filter(models.Document.body_id == document_body_id).first()
+
 
 def get_document_by_path(db: Session, path: str):
     return db.query(models.Document).filter(models.Document.path == path).first()
