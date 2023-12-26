@@ -7,9 +7,19 @@ from fastapi import FastAPI, Request, Response
 
 from llama_index.readers.file.docs_reader import PDFReader
 from llama_index import VectorStoreIndex, StorageContext, load_index_from_storage
+from time import time
 
 
 import sqlite3
+
+def timed(func): 
+    def wrapper_function(*args, **kwargs): 
+        t1 = time()
+        result = func(*args,  **kwargs) 
+        t2 = time()
+        print(f'Function {func.__name__!r} executed in {(t2-t1):.4f}s') 
+        return result
+    return wrapper_function 
 
 
 class GtcClient:
@@ -28,8 +38,10 @@ class Database:
     def __init__(self):
         con = sqlite3.connect("/db/main.db")
         self.con = con
+
+    def create_databases(self):
         try:
-            cur = con.cursor()
+            cur = self.con.cursor()
             cur.execute(
                 "CREATE TABLE document_metadata(body_id, doc_name, prod_code, doc_title, type_name, path)"
             )
@@ -72,8 +84,6 @@ class Database:
         )
         self.con.commit()
 
-
-db = Database()
 gtc = GtcClient()
 
 app = FastAPI()
@@ -81,8 +91,9 @@ app = FastAPI()
 api = FastAPI(openapi_prefix="/api")
 app.mount("/api", api)
 
-API_KEY = os.environ["API_KEY"]
+Database().create_databases()
 
+API_KEY = os.environ["API_KEY"]
 
 @app.middleware("http")
 async def check_api_key(request: Request, call_next):
@@ -91,34 +102,40 @@ async def check_api_key(request: Request, call_next):
         return Response(status_code=401)
     return await call_next(request)
 
-
+@timed
 @api.get("/items/{item_id}")
 def read_item(item_id: int, q: Union[str, None] = None):
     return {"item_id": item_id, "q": q}
 
-
+@timed
 @api.get("/load_docs")
-async def load_docs():
+def load_docs():
+    db = Database()
     docs = gtc.get_all_documents_metadata()
     for doc in docs:
         db.save_doc(doc)
 
 
+@timed
 @api.get("/list_docs")
-async def list_docs():
+def list_docs():
+    db = Database()
     return db.list_docs()
 
-
+@timed
 @api.get("/prompt")
-async def handle_prompt(prompt):
+def handle_prompt(prompt):
     print(prompt)
 
 
+@timed
 @api.get("/ask")
-async def ask(doc_id, prompt):
+def ask(doc_id, prompt):
     return ask_doc(doc_id, prompt)
 
+@timed
 def download_doc(doc_id):
+    db = Database()
     doc = db.get_doc(doc_id)
 
     if not doc["path"]:
@@ -141,6 +158,7 @@ def download_doc(doc_id):
         print(f"Document {doc['id']} has been already downloaded")
         return doc
 
+@timed
 def get_query_engine(doc):
     vsp = Path(doc["path"]).parent / "vs"
     if vsp.exists():
@@ -157,9 +175,14 @@ def get_query_engine(doc):
 
     return index.as_query_engine()
 
+@timed
 def ask_doc(doc_id, prompt):
+    # start_time = time.time()
     doc = download_doc(doc_id)
+    # print("--- %s seconds to download doc ---" % (time.time() - start_time))
     query_engine = get_query_engine(doc)
+    # print("--- %s seconds to get query engine ---" % (time.time() - start_time))
     response = query_engine.query(prompt)
+    # print("--- %s seconds to generate response doc ---" % (time.time() - start_time))
     return response
 
