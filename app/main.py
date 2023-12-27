@@ -1,3 +1,4 @@
+import uvicorn
 from llama_index.readers.file.docs_reader import PDFReader
 
 import os
@@ -6,12 +7,21 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from llama_index import StorageContext, VectorStoreIndex, load_index_from_storage
 
 from sqlalchemy.orm import Session
+from app.log_config import log_config
+
 
 from app.gtc_client import GtcClient
 from app.timed import timed
 
 from . import crud, models, schemas
 from .database import SessionLocal, engine
+
+import logging
+from logging.config import dictConfig
+
+logger = logging.getLogger(__name__)
+
+dictConfig(log_config)
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -49,22 +59,21 @@ def read_documents(id: int, db: Session = Depends(get_db)):
     return crud.get_document(db, document_id=id)
 
 
-# https://fastapi.tiangolo.com/tutorial/background-tasks/
 @timed
 @app.post("/documents/refresh")
 def load_docs(db: Session = Depends(get_db)):
-    print("Getting gtc documents")
+    logger.info("Getting gtc documents")
     gtc = GtcClient()
-    print("Getting gtc documents done")
+    logger.info("Getting gtc documents done")
     docs = gtc.get_all_documents_metadata()
     for doc in docs:
         doc_body_id = str(doc.idBodyDoc)
 
         db_doc = crud.get_document_by_body_id(db, document_body_id=doc_body_id)
         if db_doc:
-            print(f"Document {doc_body_id} already present in db")
+            logger.info(f"Document {doc_body_id} already present in db")
         else:
-            print(f"Saving doc {doc_body_id}")
+            logger.info(f"Saving doc {doc_body_id}")
             doc_create = schemas.DocumentCreate(
                 body_id=str(doc.idBodyDoc),
                 doc_name=doc.docName,
@@ -90,10 +99,10 @@ def ask(
 def read_questions(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_questions(db, skip=skip, limit=limit)
 
-
+@timed
 def handle_question(db, doc_id, prompt):
     try:
-        print(f'Generating answer for {doc_id}, question "{prompt}"')
+        logger.info(f'Generating answer for {doc_id}, question "{prompt}"')
 
         doc = crud.get_document_by_body_id(db, doc_id)
 
@@ -101,9 +110,9 @@ def handle_question(db, doc_id, prompt):
             db, doc_id=doc_id, question=prompt
         )
         if question:
-            print(f"Question already exists. Id: {question.id}")
-            if question.status == 'Answered':
-                print(f"Question {question.id} already answered.")
+            logger.info(f"Question already exists. Id: {question.id}")
+            if question.status == "Answered":
+                logger.info(f"Question {question.id} already answered.")
                 return
         else:
             question = crud.create_question(
@@ -111,13 +120,15 @@ def handle_question(db, doc_id, prompt):
             )
 
         if question.status == "Initial":
-            print(f"Generating answer for question {question.id} on document {doc.id}")
+            logger.info(
+                f"Generating answer for question {question.id} on document {doc.id}"
+            )
             crud.update_question(
                 db, schemas.QuestionUpdate(id=question.id, status="Generating")
             )
 
             if doc.status == "Initial":
-                print(f"Downloading content of document {doc.id}")
+                logger.info(f"Downloading content of document {doc.id}")
                 crud.update_document(
                     db, schemas.DocumentUpdate(id=doc.id, status="Downloading")
                 )
@@ -130,7 +141,7 @@ def handle_question(db, doc_id, prompt):
                 )
 
             if not doc.status == "Indexed":
-                print(f"Indexing document {doc.id}")
+                logger.info(f"Indexing document {doc.id}")
                 crud.update_document(
                     db, schemas.DocumentUpdate(id=doc.id, status="Indexing")
                 )
@@ -139,24 +150,26 @@ def handle_question(db, doc_id, prompt):
                     db, schemas.DocumentUpdate(id=doc.id, status="Indexed")
                 )
 
-            print(f"Getting query engine for doc {doc.id}")
+            logger.info(f"Getting query engine for doc {doc.id}")
             query_engine = get_query_engine(doc.path)
 
-            print(f"Querying engine for doc {doc.id}")
+            logger.info(f"Querying engine for doc {doc.id}")
             query = query_engine.query(prompt)
 
-            print(f"Updating question {question.id}")
+            logger.info(f"Question {question.id} answered")
             crud.update_question(
                 db,
-                schemas.QuestionUpdate(id=question.id, status="Answered", answer=query.response), # TODO save response and metadata
+                schemas.QuestionUpdate(
+                    id=question.id, status="Answered", answer=query.response
+                ),  # TODO save response and metadata
             )
     except Exception as e:
-        print(f"Error in processing question {e}")
+        logger.error(f"Error in processing question {e}")
 
 
 @timed
 def download_doc(doc_body_id):
-    print(f"Downloading {doc_body_id} document body")
+    logger.info(f"Downloading {doc_body_id} document body")
     path = Path(f"/documents/{doc_body_id}")
     path.mkdir(parents=True, exist_ok=True)
 
@@ -172,23 +185,29 @@ def download_doc(doc_body_id):
 
 @timed
 def index_document(path):
-    print(f"Indexing {path}")
+    logger.info(f"Indexing {path}")
     vsp = Path(path).parent / "vs"
-    print(f"Creating and persisting vector store at {vsp}")
+    logger.info(f"Creating and persisting vector store at {vsp}")
     reader = PDFReader()
-    print("Created reader")
+    logger.info("Created reader")
     docs = reader.load_data(path, extra_info={})  # TODO add extra info
-    print("Loaded data")
+    logger.info("Loaded data")
     index = VectorStoreIndex.from_documents(docs)
-    print("Created index")
+    logger.info("Created index")
     index.storage_context.persist(persist_dir=vsp)
-    print("persisted index")
+    logger.info("Persisted index")
 
 
 @timed
 def get_query_engine(path):
-    print("Getting query engine")
     vsp = Path(path).parent / "vs"
+    logger.info(f"Loading persisted query engine from {vsp}")
+    
     storage_context = StorageContext.from_defaults(persist_dir=vsp)
     index = load_index_from_storage(storage_context)
+    logger.info(f"Loaded persisted query engine from {vsp}")
     return index.as_query_engine()
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
