@@ -86,12 +86,21 @@ def load_docs(db: Session = Depends(get_db)):
 
 
 @timed
-@app.post("/documents/{id}/ask")
+@app.post("/documents/{id}/ask", response_model=schemas.Question)
 def ask(
     id: int, prompt, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ):
-    background_tasks.add_task(handle_question, db, id, prompt)
-    return Response(status_code=202)
+    question = crud.get_question_by_doc_id_and_question(db, doc_id=id, question=prompt)
+    if question:
+        logger.info(f"Question already exists. Id: {question.id}")
+        return question
+    else:
+        logger.info(f"Creating new question")
+        question = crud.create_question(
+            db, schemas.QuestionCreate(doc_id=id, question=prompt)
+        )
+        background_tasks.add_task(handle_question, db, question, prompt)
+        return question
 
 
 @timed
@@ -99,73 +108,56 @@ def ask(
 def read_questions(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_questions(db, skip=skip, limit=limit)
 
+
 @timed
-def handle_question(db, doc_id, prompt):
+def handle_question(db, question, prompt):
     try:
-        logger.info(f'Generating answer for {doc_id}, question "{prompt}"')
-
-        doc = crud.get_document_by_body_id(db, doc_id)
-
-        question = crud.get_question_by_doc_id_and_question(
-            db, doc_id=doc_id, question=prompt
+        logger.info(f"Generating answer for question {question.id}")
+        crud.update_question(
+            db, schemas.QuestionUpdate(id=question.id, status="Generating")
         )
-        if question:
-            logger.info(f"Question already exists. Id: {question.id}")
-            if question.status == "Answered":
-                logger.info(f"Question {question.id} already answered.")
-                return
-        else:
-            question = crud.create_question(
-                db, schemas.QuestionCreate(doc_id=doc.id, question=prompt)
+
+        doc = crud.get_document(db, question.doc_id)
+        logger.info(f"Document: {doc}")
+        if doc.status == "Initial":
+            logger.info(f"Downloading content of document {doc.id}")
+            crud.update_document(
+                db, schemas.DocumentUpdate(id=doc.id, status="Downloading")
             )
-
-        if question.status == "Initial":
-            logger.info(
-                f"Generating answer for question {question.id} on document {doc.id}"
-            )
-            crud.update_question(
-                db, schemas.QuestionUpdate(id=question.id, status="Generating")
-            )
-
-            if doc.status == "Initial":
-                logger.info(f"Downloading content of document {doc.id}")
-                crud.update_document(
-                    db, schemas.DocumentUpdate(id=doc.id, status="Downloading")
-                )
-                (_, file_path) = download_doc(doc.body_id)
-                crud.update_document(
-                    db,
-                    schemas.DocumentUpdate(
-                        id=doc.id, status="Downloaded", path=file_path
-                    ),
-                )
-
-            if not doc.status == "Indexed":
-                logger.info(f"Indexing document {doc.id}")
-                crud.update_document(
-                    db, schemas.DocumentUpdate(id=doc.id, status="Indexing")
-                )
-                index_document(doc.path)
-                crud.update_document(
-                    db, schemas.DocumentUpdate(id=doc.id, status="Indexed")
-                )
-
-            logger.info(f"Getting query engine for doc {doc.id}")
-            query_engine = get_query_engine(doc.path)
-
-            logger.info(f"Querying engine for doc {doc.id}")
-            query = query_engine.query(prompt)
-
-            logger.info(f"Question {question.id} answered")
-            crud.update_question(
+            (_, file_path) = download_doc(doc.body_id)
+            crud.update_document(
                 db,
-                schemas.QuestionUpdate(
-                    id=question.id, status="Answered", answer=query.response
-                ),  # TODO save response and metadata
+                schemas.DocumentUpdate(
+                    id=doc.id, status="Downloaded", path=file_path
+                ),
             )
+
+        if not doc.status == "Indexed":
+            logger.info(f"Indexing document {doc.id}")
+            crud.update_document(
+                db, schemas.DocumentUpdate(id=doc.id, status="Indexing")
+            )
+            index_document(doc.path)
+            crud.update_document(
+                db, schemas.DocumentUpdate(id=doc.id, status="Indexed")
+            )
+
+        logger.info(f"Getting query engine for doc {doc.id}")
+        query_engine = get_query_engine(doc.path)
+
+        logger.info(f"Querying engine for doc {doc.id}")
+        query = query_engine.query(prompt)
+
+        logger.info(f"Question {question.id} answered")
+        crud.update_question(
+            db,
+            schemas.QuestionUpdate(
+                id=question.id, status="Answered", answer=query.response
+            ),  # TODO save response and metadata
+        )
     except Exception as e:
         logger.error(f"Error in processing question {e}")
-
+        crud.update_question(db, schemas.QuestionUpdate(id=question.id, status="Error"))
 
 @timed
 def download_doc(doc_body_id):
@@ -202,7 +194,7 @@ def index_document(path):
 def get_query_engine(path):
     vsp = Path(path).parent / "vs"
     logger.info(f"Loading persisted query engine from {vsp}")
-    
+
     storage_context = StorageContext.from_defaults(persist_dir=vsp)
     index = load_index_from_storage(storage_context)
     logger.info(f"Loaded persisted query engine from {vsp}")
