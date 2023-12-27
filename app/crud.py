@@ -45,6 +45,35 @@ def update_document(db: Session, document: schemas.DocumentUpdate):
     return doc
 
 
+def get_questions(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Question).offset(skip).limit(limit).all()
+
+def get_question_by_doc_id_and_question(db: Session, doc_id: int, question: str):
+    return db.query(models.Question).filter(models.Question.doc_id == doc_id and models.Question.question == question).first()
+
+
+def create_question(db: Session, question: schemas.QuestionCreate):
+    db_question = models.Question(
+        doc_id = question.document_id,
+        question = question.question,
+        status = 'Initial'
+    )
+    db.add(db_question)
+    db.commit()
+    db.refresh(db_question)
+    return db_question
+
+def update_question(db: Session, update: schemas.QuestionUpdate):
+    question = db.query(models.Question).filter(models.Question.id == update.id).first()
+    if update.status:
+        question.status = update.status
+    if update.answer:
+        question.answer = update.answer
+    
+    db.commit()
+    db.refresh(question)
+    return question
+
 
 # def get_items(db: Session, skip: int = 0, limit: int = 100):
 #     return db.query(models.Item).offset(skip).limit(limit).all()

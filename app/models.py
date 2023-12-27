@@ -17,3 +17,14 @@ class Document(Base):
     type_name = Column(String, index=True)
     path = Column(String, unique=True, index=True)
     status =  Column(String, index=True)
+    questions = relationship("Question", back_populates="document")
+
+class Question(Base):
+    __tablename__ = "questions"
+    id = Column(Integer, primary_key=True, index=True)
+    doc_id = Column(Integer, ForeignKey("documents.id"))
+    document = relationship("Document", back_populates="questions")
+    question = Column(String, index=True)
+    answer = Column(String, index=True)
+    status = Column(String, index=True)
+

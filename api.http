@@ -1,3 +1,5 @@
+###
+
 POST http://localhost/documents/refresh
 X-API-KEY: local-key
 
@@ -14,4 +16,9 @@ X-API-KEY: local-key
 ###
 
 POST http://localhost/documents/1/ask?prompt=O%20czym%20jest%20ten%20dokument
+X-API-KEY: local-key
+
+###
+
+GET http://localhost/questions
 X-API-KEY: local-key
